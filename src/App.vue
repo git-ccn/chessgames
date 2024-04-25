@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch, watchEffect } from 'vue';
 const clearDate = reactive({
   xy: [],
   height: null
@@ -14,18 +14,53 @@ const chessname = reactive({
   redchess: ['兵', '兵', '兵', '兵', '兵', '炮', '炮', '車', '马', '象', '士', '将', '士', '象', '马', '車',]
 })
 // 棋子移动记录
-const chessAdress = reactive([])
-//
-// 棋子选中
+let chessAdress = reactive([])
+
+// 上一步棋子数据
 const selectedChess = ref(null)
-// 是否选中
-const selects = ref(false)
+
+// 选中棋子数据
+const chooseChess = ref(null)
+
 // 棋盘点的数据
 const chesspoint = reactive({
   x: [],
   y: [],
   value: []
 })
+
+// 游戏开始
+const startGame = ref(false)
+
+// 开始的一方，选择的棋子（每回合只能走一步）
+const selects = ref()
+
+// 错误的路径
+const wrong = ref(false)
+
+// 谁方回合
+const name = reactive({
+  title: '',
+  showFlag: false,
+  start:true
+})
+
+// 判定输赢
+const win = ref('')
+
+// 预判定路径
+const predictLine = ref(true)
+//预判定上一步的点
+const predictSelectdChess = ref(null)
+// 预判断后---下部棋子走动
+const countAdress = reactive([{
+  key: '',
+  adress: {}
+}])
+
+// 搜索对手
+const seacherPeople = ref(true)
+
 // 棋子
 function chessman(ctx, x, y, r, text, textx, texty, color) {
   ctx.beginPath()
@@ -84,12 +119,6 @@ function splitlineBock(ctx, startx, starty, width, height, i) {
 
 // 棋盘布局数据
 const chessData = () => {
-  chesspoint.x.push(chesspoint.x[chesspoint.x.length - 1] + compontsXY.x)
-  chesspoint.x.push(chesspoint.x[0] - compontsXY.x)
-  chesspoint.y.push(chesspoint.y[chesspoint.y.length - 1] + compontsXY.y)
-  chesspoint.y.push(chesspoint.y[0] - compontsXY.y)
-  chesspoint.x = chesspoint.x.sort((a, b) => a - b)
-  chesspoint.y = chesspoint.y.sort((a, b) => a - b)
   for (let i = 0; i < chesspoint.x.length; i++) {
     const elementx = chesspoint.x[i];
     for (let index = 0; index < chesspoint.y.length; index++) {
@@ -97,7 +126,6 @@ const chessData = () => {
       chesspoint.value.push({ x: elementx, y: elementy })
     }
   }
-  // console.log(chesspoint);
 }
 
 // 交叉线
@@ -178,7 +206,7 @@ const init = () => {
   for (let i = 0; i < 16; i++) {
     let x = initPoint.x, textx = 14, y = initPoint.y + compontsXY.y * 6, texty = 30 + compontsXY.y * 6
     if (i === 5) {
-      x = x + compontsXY.x 
+      x = x + compontsXY.x
       y = y + compontsXY.y
       textx = textx + compontsXY.x
       texty = texty + compontsXY.y
@@ -240,14 +268,17 @@ function clearArcFun(cxt, data) {
 
 // 选中的样式
 function chooseStyle(ctx, res) {
+  function draw() {
+    ctx.beginPath()
+    ctx.strokeStyle = 'blue'
+    ctx.arc(x, y, r + 3, 0, 2 * Math.PI)
+    ctx.stroke()
+    ctx.closePath()
+  }
   const { x, y, r } = res
   clearArcFun(ctx, selectedChess.value)
   selectedChess.value = { ...selectedChess.value, ...res, r: r + 4 }
-  ctx.beginPath()
-  ctx.strokeStyle = 'blue'
-  ctx.arc(x, y, r + 3, 0, 2 * Math.PI)
-  ctx.stroke()
-  ctx.closePath()
+  draw()
 
 }
 
@@ -503,7 +534,10 @@ function moveLine(ctx, value, { x, y, textx, texty, name, sign, r }) {
       chessman(ctx, x, y, r - 4, name, textx, texty, sign)
       // 吃子
       eatChess(x, y, sign)
+      wrong.value = false
       selectedChess.value = { ...selectedChess.value, x: x, y: y, textx: textx, texty: texty }
+    } else {
+      wrong.value = true
     }
   }
 }
@@ -536,10 +570,8 @@ const targetChess = (name, x, y, sign) => {
         return true
       }
       if (
-        (value.x === selectedChess.value.x + compontsXY.x && value.y === selectedChess.value.y + compontsXY.y) ||
-        (value.x === selectedChess.value.x - compontsXY.x && value.y === selectedChess.value.y + compontsXY.y) ||
-        (value.x === selectedChess.value.x + compontsXY.x && value.y === selectedChess.value.y - compontsXY.y) ||
-        (value.x === selectedChess.value.x - compontsXY.x && value.y === selectedChess.value.y - compontsXY.y) ||
+        (((value.x < x && value.x >= chooseChess.value.x) || (value.x > x && value.x <= chooseChess.value.x)) &&
+          ((value.y < y && value.y >= chooseChess.value.y) || (value.y > y && value.y <= chooseChess.value.y)) && value.key != chooseChess.value.key) ||
         (value.x === x && value.y === y && value.sign === sign)
       ) {
         return true
@@ -550,18 +582,25 @@ const targetChess = (name, x, y, sign) => {
       const label = Object.keys(item)[0]
       const value = item[label]
       let jumpCan
+      let flag = false
       const pointJump =
-        ((value.x < x && value.x > selectedChess.value.x || (value.x > x && value.x < selectedChess.value.x)) && value.y === y) ||
-        ((value.y < y && value.y > selectedChess.value.y || (value.y > y && value.y < selectedChess.value.y)) && value.x === x)
+        ((value.x < x && value.x > chooseChess.value.x || (value.x > x && value.x < chooseChess.value.x)) && value.y === y) ||
+        ((value.y < y && value.y > chooseChess.value.y || (value.y > y && value.y < chooseChess.value.y)) && value.x === x)
       if (pointJump) {
-        console.log('111');
         jumpCan = chessAdress.find(item => {
           const label = Object.keys(item)[0]
           const value = item[label]
-          if(x === value.x && y === value.y && sign != value.sign) return true
+          if (x === value.x && y === value.y && sign != value.sign) {
+            flag = true
+            return true
+          }
         })
+      } else {
+        if (x === value.x && y === value.y && sign === value.sign) jumpCan = true
       }
       if (pointJump && !jumpCan) {
+        return true
+      } else if (!pointJump && jumpCan && !flag) {
         return true
       }
     })
@@ -577,6 +616,8 @@ const eatChess = (x, y, sign) => {
     const value = item[label]
     if (x === value.x && y === value.y && sign != value.sign) {
       chessAdress.splice(index, 1)
+      win.value = label === '帅' ? '你赢了' : label === '将' ? '你输了' : ''
+      win.value != '' && start()
       break
     }
   }
@@ -584,15 +625,21 @@ const eatChess = (x, y, sign) => {
 
 // 棋子的路径规则
 const chessrules = (ctx, data, pagex, pagey) => {
+  // console.log(data);
   let { x, y, textx, texty, sign, name, r, key } = data.value
   // 判断点击的点是否在棋盘上
   const adress = chesspoint.value.filter(item => (pagex >= item.x - 25 && pagex <= item.x + 25) && (pagey >= item.y - 25 && pagey <= item.y + 25))
+  if (adress.length === 0) {
+    wrong.value = true
+    return
+  }
   textx = textx + adress[0].x - x
   texty = texty + adress[0].y - y
   x = adress[0].x
   y = adress[0].y
   // 无法移动点
   if (targetChess(name, x, y, sign)) {
+    wrong.value = true
     return;
   }
   // 移动
@@ -602,7 +649,9 @@ const chessrules = (ctx, data, pagex, pagey) => {
     const value = item[label]
     if (value.sign === sign && value.key === key) {
       const comp = moveLine(ctx, value, { x, y, textx, texty, name, sign, r })
-      if (name === '車' || name == '炮') {
+      if (name === '車') {
+        comp(x === value.x || y === value.y)
+      } else if (name == '炮') {
         comp(x === value.x || y === value.y)
       } else if (name === '马') {
         comp(
@@ -656,15 +705,29 @@ const chessrules = (ctx, data, pagex, pagey) => {
     }
   }
 }
-
+const pointE = ref(null)
 // 移动
-const play = (e) => {
+const play = (e, sign) => {
+  if (!startGame.value) return
+  if (pointE.value) return
   const canvas = document.getElementById('chessback')
   const ctx = canvas.getContext("2d");
   const x = e.offsetX
   const y = e.offsetY
+  pointE.value = e?.pointerType === 'mouse'
+  setTimeout(() => {
+    pointE.value = false
+  }, 500);
+  !sign && socket.send(JSON.stringify({ offsetX: x, offsetY: y, sign: 'move' }))
   if (selectedChess.value?.flag) {
     chessrules(ctx, selectedChess, x, y)
+    if (!wrong.value) {
+      selects.value = selects.value === 'black' ? 'red' : 'black'
+      name.title = selects.value === 'black' ? '黑方回合' : '红方回合'
+      setTimeout(() => {
+        name.title = '思考中...'
+      }, 2000);
+    }
     selectedChess.value.flag = false
     return
   }
@@ -672,13 +735,129 @@ const play = (e) => {
     const label = Object.keys(item)[0]
     const value = item[label]
     if ((x >= value.x - 25 && x <= value.x + 25) && (y >= value.y - 25 && y <= value.y + 25)) {
-      selectedChess.value = { ...selectedChess.value, flag: true }
-      chooseStyle(ctx, { ...value, r: 25, name: label })
-      break
+      // 判断选中了哪一方
+      if (selects.value === value.sign) {
+        chooseChess.value = value
+        selectedChess.value = { ...selectedChess.value, flag: true }
+        chooseStyle(ctx, { ...value, r: 25, name: label })
+        break
+      }
     }
   }
 }
 
+/**--------  start待开发  ---------**/
+
+/**
+ * AI算法
+ */
+//棋子的价值
+// const chessPriceValues = reactive({
+//   '車': 100,
+//   '马': 50,
+//   '相': 30,
+//   '士': 30,
+//   '帅': 1000,
+//   '炮': 50,
+//   '卒': 10,
+//   '兵': 10,
+//   '象': 30,
+//   '将': 1000
+// })
+// const evaluateHandle = () => {
+//   let score = 0
+//   const sign = 'red'
+//   chesspoint.value.forEach(element => {
+//     const {x,y} = element
+//     const chessname = chessAdress.find(ele=>{
+//       const label = Object.keys(ele)[0]
+//       const value = ele[label]
+//       if(value.x === x && value.y === y && value.sign === sign) return true
+//     })
+//     const name = Object.keys(chessname)[0]
+//     if(chessname != undefined){
+//       score += chessPriceValues[name]
+//     }
+//   });
+//   return score
+// }
+// const AIplay = () => {
+//   const canvas = document.getElementById('chessback')
+//   const ctx = canvas.getContext('2d')
+
+// }
+// watch(selects, () => {
+//   if (selects.value === 'black') {
+//     AIplay()
+//   }
+// })
+//end
+
+
+
+
+// 游戏开始
+
+/**--------  end待开发  ---------**/
+
+
+/**
+ * WebSocket 双人对战
+ */
+ var socket = new WebSocket('ws://localhost:8085');
+  socket.addEventListener('open', () => {
+    console.log('WebSocket连接已建立');
+  });
+
+  socket.addEventListener('message', (event) => {
+    const message = event.data;
+    const fileReader = new FileReader()
+    fileReader.readAsText(message, 'utf-8')
+    fileReader.onload = function () {
+      const result = fileReader.result
+      const Chessvalue = JSON.parse(result)
+      if (Chessvalue?.sign === 'start') {
+        seacherPeople.value = Chessvalue.seacherPeople
+        name.start = false
+        if (seacherPeople.value) return
+        name.showFlag = true
+        selects.value = Chessvalue.option
+        name.title = Chessvalue.option === 'black' ? '黑方回合' : '红方回合'
+        setTimeout(() => {
+          name.title = '思考中...'
+        }, 2000);
+      } else if (Chessvalue?.sign === 'move') {
+        const { offsetX, offsetY } = Chessvalue
+        play({ offsetX, offsetY }, true)
+      } else {
+        seacherPeople.value = Chessvalue === 'false'
+      }
+    }
+  });
+
+  socket.addEventListener('close', () => {
+    console.log('WebSocket连接已关闭');
+  });
+
+
+
+// 游戏开始
+const start = () => {
+  selected.showModal()
+}
+
+const handleRadioClick = (option) => {
+  startGame.value = true
+  socket.send(JSON.stringify({ option, seacherPeople: seacherPeople.value, sign: 'start' }))
+  selected.close()
+}
+
+// 选择对战
+const choose = ref('')
+const handleChooseType = (value) => {
+  if (value === 'AI') return window.alert('开发中...')
+  choose.value = value
+}
 onMounted(() => {
   init()
   chessData()
@@ -688,6 +867,36 @@ onMounted(() => {
 <template>
   <div class="container">
     <canvas id="chessback" width="600" height="650" @click="play" />
+    <button @click="start" v-if="name.start" class="startStyle">开始游戏</button>
+    <div class="broadcast" v-show="name.showFlag">{{ name.title }}</div>
+    <div class="broadcast" v-if="!name.start && seacherPeople">匹配中...</div>
+    <dialog id="selected">
+      <div class="img" v-if="win === ''">
+        <template v-if="choose === ''">
+          <i>
+            <label for="computer">人机对战</label><input type="radio" name="choseeGo" id="computer"
+              @click="handleChooseType('AI')">
+          </i>
+          <i>
+            <label for="people">玩家对战</label><input type="radio" name="choseeGo" id="people"
+              @click="handleChooseType('Player')">
+          </i>
+        </template>
+        <template v-else>
+          <i>
+            <label for="computer">黑方先</label><input type="radio" name="choseeGo" id="computer"
+              @click="handleRadioClick('black')">
+          </i>
+          <i>
+            <label for="people">红方先</label><input type="radio" name="choseeGo" id="people"
+              @click="handleRadioClick('red')">
+          </i>
+        </template>
+      </div>
+      <div class="img win" v-if="win != ''">
+        {{ win }}
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -698,6 +907,40 @@ onMounted(() => {
   height: 50px;
   border: 2px solid red;
   /* 其他样式... */
+}
+
+.img {
+  width: 200px;
+  height: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.startStyle {
+  position: absolute;
+  top: 30px;
+  left: 30px;
+}
+
+.broadcast {
+  position: absolute;
+  width: 300px;
+  height: 50px;
+  top: 10%;
+  font-size: 24px;
+  text-align: center;
+  line-height: 50px;
+  letter-spacing: 0.5em;
+  border-radius: 20px;
+  font-family: '宋体';
+  font-style: italic;
+  font-weight: bolder;
+  color: rgb(218, 186, 151);
+  background-color: rgba(53, 39, 29, 0.6);
+
+  transition: all 1s ease-in-out;
 }
 
 .container {
